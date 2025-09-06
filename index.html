@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>街景主观感知问卷</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body{max-width:860px;margin:24px auto;font-family:Arial,Helvetica,sans-serif;line-height:1.5;color:#222}
+    .hidden{display:none}
+    .card{border:1px solid #ddd;border-radius:12px;padding:16px}
+    img{max-width:100%;border:1px solid #ccc;border-radius:6px}
+    .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:14px}
+    button{padding:10px 8px;border-radius:8px;border:1px solid #bbb;background:#fff;cursor:pointer}
+    button:hover{background:#f3f6ff}
+    progress{width:100%;height:10px}
+    .meta{color:#666}
+    input[type="text"],input[type="number"]{padding:6px 8px;border:1px solid #bbb;border-radius:6px}
+    label{user-select:none}
+  </style>
+</head>
+<body>
+<div class="card">
+  <h2>街景主观感知问卷</h2>
+
+  <div id="intro">
+    <p>说明：每题显示两张街景图片，请判断题干维度上哪一张更强，并选择强度。</p>
+    <p class="meta">选项：上图非常强 / 上图稍强 / 两者差不多 / 下图稍强 / 下图非常强；快捷键 1~5。</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:center">
+      <label>受试者ID：<input id="pid" type="text" placeholder="例如 S001"></label>
+      <label>每位题量：<input id="takeN" type="number" min="1" value="60" style="width:100px"></label>
+    </div>
+    <div style="margin-top:8px">
+      <label><input id="consent" type="checkbox"> 我已知情并同意参与本研究</label>
+    </div>
+    <div style="margin-top:12px">
+      <button id="start">开始</button>
+    </div>
+    <div id="err" style="color:#b00020;margin-top:8px"></div>
+    <div class="meta" style="margin-top:8px">系统将从 pairs.csv 读取题库（列：pair_id,imageA,imageB,dimension）。图片路径应写成相对路径，如 sampled_images/xxx.png。</div>
+  </div>
+
+  <div id="trial" class="hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div>第 <span id="idx"></span>/<span id="total"></span> 题</div>
+      <div>维度：<b id="dim"></b></div>
+    </div>
+    <progress id="prog" max="100" value="0"></progress>
+
+    <div style="margin-top:12px">
+      <img id="top">
+      <div style="height:10px"></div>
+      <img id="btm">
+    </div>
+
+    <div class="grid">
+      <button data-score="2">上图 非常强(1)</button>
+      <button data-score="1">上图 稍强(2)</button>
+      <button data-score="0">两者差不多(3)</button>
+      <button data-score="-1">下图 稍强(4)</button>
+      <button data-score="-2">下图 非常强(5)</button>
+    </div>
+
+    <div class="meta" style="margin-top:8px">反应时 <span id="rt">0</span> ms；已记录受试者ID与时间戳</div>
+  </div>
+
+  <div id="finish" class="hidden">
+    <h3>完成</h3>
+    <button id="dl">下载 responses.csv</button>
+    <div id="sum" class="meta" style="margin-top:8px"></div>
+  </div>
+</div>
+
+<script>
+function shuffle(a){for(var i=a.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1));var t=a[i];a[i]=a[j];a[j]=t}return a}
+function parseCSV(text){
+  text=text.replace(/^\uFEFF/,'').trim();
+  var l=text.split(/\r?\n/); if(!l.length) return [];
+  var h=l.shift().split(',');
+  var out=[],k;
+  for(var r=0;r<l.length;r++){
+    if(!l[r]) continue;
+    var c=l[r].split(',');
+    var o={};
+    for(k=0;k<h.length;k++){o[h[k].trim()]=(c[k]||'').trim()}
+    out.push(o);
+  }
+  return out;
+}
+function downloadCSV(name, rows){
+  if(!rows.length){alert('无数据');return}
+  var keys=Object.keys(rows[0]);
+  var lines=[keys.join(',')];
+  for(var r=0;r<rows.length;r++){
+    var arr=[]; for(var i=0;i<keys.length;i++){arr.push(rows[r][keys[i]]!=null?String(rows[r][keys[i]]):'')}
+    lines.push(arr.join(','));
+  }
+  var blob=new Blob([lines.join('\n')],{type:'text/csv;charset=utf-8;'});
+  var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click();
+}
+
+var ALL=[], trials=[], iIdx=0, t0=0, TAKE=60, RESP=[];
+var PID="", ATTEN_EVERY=15;  // 每隔多少题插一个注意力题
+
+var intro=document.getElementById('intro'), start=document.getElementById('start'), err=document.getElementById('err');
+var pidEl=document.getElementById('pid'), takeN=document.getElementById('takeN'), consent=document.getElementById('consent');
+var trial=document.getElementById('trial'), topImg=document.getElementById('top'), btmImg=document.getElementById('btm');
+var idxEl=document.getElementById('idx'), totalEl=document.getElementById('total'), dimEl=document.getElementById('dim'), prog=document.getElementById('prog'), rtEl=document.getElementById('rt');
+var finish=document.getElementById('finish'), dl=document.getElementById('dl'), sum=document.getElementById('sum');
+
+start.onclick=function(){
+  err.textContent='';
+  PID=(pidEl.value||'').trim();
+  if(!consent.checked){ err.textContent='请勾选知情同意'; return }
+  if(!PID){ err.textContent='请填写受试者ID'; return }
+
+  TAKE=parseInt(takeN.value,10)||60;
+  fetch('pairs.csv',{cache:'no-store'})
+    .then(function(r){ if(!r.ok) throw new Error('pairs.csv HTTP '+r.status); return r.text(); })
+    .then(function(txt){
+      ALL=parseCSV(txt).filter(function(r){return r.imageA && r.imageB});
+      if(!ALL.length) throw new Error('题库为空或表头错误，应为：pair_id,imageA,imageB,dimension');
+      // 采样题量
+      shuffle(ALL);
+      var core = ALL.slice(0, Math.min(TAKE, ALL.length));
+      // 插入注意力题：每隔 ATTEN_EVERY 题，取一条，把 imageA 复制给 imageB，dimension 标记
+      var withAtt=[];
+      for(var x=0;x<core.length;x++){
+        withAtt.push(core[x]);
+        if((x+1)%ATTEN_EVERY===0){
+          var base=core[x];
+          withAtt.push({
+            pair_id: 'ATTN_'+(x+1),
+            imageA: base.imageA,
+            imageB: base.imageA,
+            dimension: (base.dimension||'') + '_attn'
+          });
+        }
+      }
+      trials=withAtt;
+      iIdx=0; RESP=[];
+      totalEl.textContent=String(trials.length);
+      intro.classList.add('hidden'); trial.classList.remove('hidden');
+      renderTrial();
+    })
+    .catch(function(e){ err.textContent='启动失败：'+e.message });
+};
+
+function preload(src){ return new Promise(function(res){ var im=new Image(); im.onload=res; im.onerror=res; im.src=src; }); }
+
+function renderTrial(){
+  var row=trials[iIdx];
+  var flip=Math.random()>0.5;
+  var topPath=flip?row.imageB:row.imageA;
+  var btmPath=flip?row.imageA:row.imageB;
+
+  idxEl.textContent=String(iIdx+1);
+  dimEl.textContent=row.dimension||'';
+  prog.value=Math.round(iIdx/trials.length*100);
+
+  Promise.all([preload(topPath), preload(btmPath)]).then(function(){
+    topImg.src=topPath; btmImg.src=btmPath; rtEl.textContent='0'; t0=performance.now();
+    // 提前预加载下一题，提升流畅度
+    if(iIdx+1<trials.length){
+      var nx=trials[iIdx+1], f2=Math.random()>0.5, t2=f2?nx.imageB:nx.imageA, b2=f2?nx.imageA:nx.imageB;
+      preload(t2); preload(b2);
+    }
+  });
+}
+
+function choose(score,label){
+  var row=trials[iIdx];
+  var rt=Math.round(performance.now()-t0);
+  var is_attn = String(row.pair_id).indexOf('ATTN_')===0;
+  var attn_pass = '';
+  if(is_attn){
+    // 注意力题正确答案倾向于选择“差不多(3)”即 score==0
+    attn_pass = (String(score)==='0') ? 'pass' : 'fail';
+  }
+  RESP.push({
+    pid: PID,
+    pair_id: row.pair_id,
+    imageA: row.imageA,
+    imageB: row.imageB,
+    dimension: row.dimension,
+    top: topImg.getAttribute('src')||'',
+    bottom: btmImg.getAttribute('src')||'',
+    choice_label: label,
+    score: String(score),
+    rt_ms: String(rt),
+    is_attention: is_attn ? '1':'0',
+    attention_result: attn_pass,
+    ts: new Date().toISOString()
+  });
+  if(iIdx+1>=trials.length){
+    trial.classList.add('hidden'); finish.classList.remove('hidden'); prog.value=100;
+    var attnDone = RESP.filter(function(r){return r.is_attention==='1'}).length;
+    var attnPass = RESP.filter(function(r){return r.attention_result==='pass'}).length;
+    sum.textContent='完成 '+RESP.length+' 题；注意力题 '+attnDone+' 题，通过 '+attnPass+' 题。';
+  }else{
+    iIdx++; renderTrial();
+  }
+}
+
+Array.prototype.forEach.call(document.querySelectorAll('.grid button'), function(b){
+  b.addEventListener('click', function(){ choose(b.getAttribute('data-score'), b.textContent) });
+});
+
+window.addEventListener('keydown', function(e){
+  if(trial.classList.contains('hidden')) return;
+  if(e.key==="1") choose(2,"上图 非常强(1)");
+  if(e.key==="2") choose(1,"上图 稍强(2)");
+  if(e.key==="3") choose(0,"两者差不多(3)");
+  if(e.key==="4") choose(-1,"下图 稍强(4)");
+  if(e.key==="5") choose(-2,"下图 非常强(5)");
+});
+
+dl.onclick=function(){ downloadCSV('responses.csv', RESP) };
+</script>
+</body>
+</html>
