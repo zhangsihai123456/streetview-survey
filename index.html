@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>街景主观感知问卷</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body{max-width:920px;margin:24px auto;font-family:Arial,Helvetica,sans-serif;line-height:1.6;color:#222}
+    .card{border:1px solid #ddd;border-radius:12px;padding:18px}
+    .hidden{display:none}
+    img{max-width:100%;border:1px solid #ccc;border-radius:6px}
+    .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:14px}
+    button{padding:10px 8px;border-radius:8px;border:1px solid #bbb;background:#fff;cursor:pointer}
+    button:hover{background:#f3f6ff}
+    progress{width:100%;height:10px}
+    .subtle{color:#666}
+    input[type="text"]{padding:6px 8px;border:1px solid #bbb;border-radius:6px}
+    .topbar{display:flex;justify-content:space-between;align-items:center;gap:8px}
+    .qtitle{font-weight:bold}
+  </style>
+</head>
+<body>
+<div class="card">
+
+  <!-- 欢迎页（含学校、用途与说明） -->
+  <div id="intro">
+    <h2>街景主观感知问卷</h2>
+    <p>
+      您好！我是 <b>西安建筑科技大学</b> 的学生。本问卷用于学术研究论文的数据采集。
+      请您依据<b>主观直觉</b>作答，不存在标准答案。每题会呈现两张街景照片，请判断在给定的<b>主观指标</b>上哪一张更强，并选择强度。
+    </p>
+    <ul>
+      <li>每位参与者共 <b>22 题</b>，分别对应 22 个主观指标（每个指标各 1 题）。</li>
+      <li>选项：上图非常强、上图稍强、两者差不多、下图稍强、下图非常强；支持键盘 <b>1~5</b> 快捷键。</li>
+      <li>答题数据仅用于学术研究，严格保密与匿名处理。</li>
+    </ul>
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:6px">
+      <label>受试者ID：<input id="pid" type="text" placeholder="例如 S001"></label>
+      <label><input id="consent" type="checkbox"> 我已知情并同意参与本研究</label>
+    </div>
+    <div style="margin-top:12px">
+      <button id="start">开始作答</button>
+    </div>
+    <div id="err" class="subtle" style="color:#b00020;margin-top:8px"></div>
+    <div class="subtle" style="margin-top:8px">
+      系统会从 <code>pairs.csv</code> 汇总所有图片文件名（两列均可），并为 22 个指标各随机抽两张图片形成题目。图片路径请写相对路径，如 <code>sampled_images/xxx.png</code>；若只写文件名，系统会自动补 <code>sampled_images/</code> 前缀。
+    </div>
+  </div>
+
+  <!-- 作答页 -->
+  <div id="trial" class="hidden">
+    <div class="topbar">
+      <div>第 <span id="idx"></span>/<span id="total"></span> 题</div>
+      <div class="qtitle" id="question">就“——”而言，哪张更强？</div>
+    </div>
+    <progress id="prog" max="100" value="0"></progress>
+
+    <div style="margin-top:12px">
+      <img id="top"><div style="height:10px"></div><img id="btm">
+    </div>
+
+    <div class="grid">
+      <button data-score="2">上图 非常强(1)</button>
+      <button data-score="1">上图 稍强(2)</button>
+      <button data-score="0">两者差不多(3)</button>
+      <button data-score="-1">下图 稍强(4)</button>
+      <button data-score="-2">下图 非常强(5)</button>
+    </div>
+
+    <div class="subtle" style="margin-top:8px">反应时 <span id="rt">0</span> ms（支持 1~5 快捷键）</div>
+  </div>
+
+  <!-- 完成页 -->
+  <div id="finish" class="hidden">
+    <h3>已完成，感谢您的参与！</h3>
+    <p class="subtle" id="sum"></p>
+    <button id="dl">下载本次答题数据（responses.csv）</button>
+  </div>
+</div>
+
+<script>
+/* 工具函数 */
+function shuffle(a){for(var i=a.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1));var t=a[i];a[i]=a[j];a[j]=t}return a}
+function parseCSV(text){
+  text=text.replace(/^\uFEFF/,'').trim();
+  var lines=text.split(/\r?\n/); if(!lines.length) return [];
+  var head=lines.shift().split(',');
+  var out=[],i;
+  for(var r=0;r<lines.length;r++){
+    if(!lines[r]) continue;
+    var c=lines[r].split(',');
+    var o={}; for(i=0;i<head.length;i++){o[head[i].trim()]=(c[i]||'').trim()}
+    out.push(o);
+  }
+  return out;
+}
+function downloadCSV(name, rows){
+  if(!rows.length){alert('无数据');return}
+  var keys=Object.keys(rows[0]), lines=[keys.join(',')];
+  for(var i=0;i<rows.length;i++){
+    var arr=[]; for(var k=0;k<keys.length;k++){arr.push(rows[i][keys[k]]!=null?String(rows[i][keys[k]]):'')}
+    lines.push(arr.join(','));
+  }
+  var blob=new Blob([lines.join('\n')],{type:'text/csv;charset=utf-8;'});
+  var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click();
+}
+function preload(src){return new Promise(function(res){var im=new Image();im.onload=res;im.onerror=res;im.src=src;})}
+function fixPath(p){
+  if(!p) return '';
+  p = p.trim();
+  if(/^https?:\/\//i.test(p) || p.startsWith('./') || p.startsWith('../') || p.startsWith('/')) return p;
+  if(p.indexOf('/') >= 0) return p;
+  return 'sampled_images/' + p;
+}
+
+/* 22 指标（英文键 + 中文题干） */
+function normKey(s){return (s||'').toLowerCase().replace(/[\s\-.]/g,'')}
+var INDICATORS = [
+  {en:"Open", zh:"开敞感"},
+  {en:"Friendly", zh:"亲切感"},
+  {en:"Lively", zh:"活力感"},
+  {en:"Comfortable", zh:"舒适度"},
+  {en:"Greenery", zh:"绿化感"},
+  {en:"Calm", zh:"宁静感"},
+  {en:"Bright", zh:"明亮度"},
+  {en:"Old-fashioned", zh:"古朴感"},
+  {en:"Safe", zh:"安全感"},
+  {en:"Neat", zh:"整洁度"},
+  {en:"Lived in feel", zh:"生活气息"},
+  {en:"Cozy", zh:"温馨感"},
+  {en:"Clean", zh:"清洁度"},
+  {en:"Beautiful", zh:"美观度"},
+  {en:"Wealthy", zh:"富裕感"},
+  {en:"Boring", zh:"乏味感"},
+  {en:"Depressing", zh:"压抑感"},
+  {en:"Like", zh:"喜欢程度"},
+  {en:"Interesting", zh:"有趣度"},
+  {en:"Desirable for living", zh:"宜居性"},
+  {en:"Desirable for going", zh:"愿前往度"},
+  {en:"Attractive", zh:"吸引力"}
+];
+
+/* DOM & 状态 */
+var intro=document.getElementById('intro'), start=document.getElementById('start'), err=document.getElementById('err');
+var pidEl=document.getElementById('pid'), consent=document.getElementById('consent');
+
+var trial=document.getElementById('trial'), questionEl=document.getElementById('question');
+var idxEl=document.getElementById('idx'), totalEl=document.getElementById('total'), prog=document.getElementById('prog');
+var topImg=document.getElementById('top'), btmImg=document.getElementById('btm'), rtEl=document.getElementById('rt');
+
+var finish=document.getElementById('finish'), dl=document.getElementById('dl'), sum=document.getElementById('sum');
+
+var trials=[], iIdx=0, t0=0, RESP=[], PID="";
+
+/* 构造 22 题：从图片池中按指标各取 2 张不同图片 */
+function buildTrialsFromImagePool(imgPool){
+  var pool = imgPool.slice(); // 复制
+  shuffle(pool);
+  // 需要 44 张不重复，如果不足则允许重复（极端情况）
+  var need = INDICATORS.length * 2;
+  var picks = [];
+  if(pool.length >= need){
+    picks = pool.slice(0, need);
+  }else{
+    var i=0; while(picks.length < need){picks.push(pool[i % pool.length]); i++;}
+  }
+  // 生成题目并尽量避免同图对比
+  var t=[], p=0, order = INDICATORS.slice(); shuffle(order);
+  for(var k=0;k<order.length;k++){
+    var a = picks[p++], b = picks[p++];
+    if(a === b){
+      // 尽量替换成不同的一张
+      var alt = pool[(p+k) % pool.length];
+      if(alt && alt !== a) b = alt;
+    }
+    t.push({
+      pair_id: 'RND_'+(k+1),
+      imageA: a,
+      imageB: b,
+      dimension: order[k].en,
+      zh: order[k].zh
+    });
+  }
+  return t;
+}
+
+/* 渲染一题 */
+function renderTrial(){
+  var row = trials[iIdx];
+  // 这里真正使用 fixPath，兼容只写文件名的情况
+  var a = fixPath(row.imageA), b = fixPath(row.imageB);
+  var flip = Math.random() > 0.5;
+  var topPath = flip ? b : a;
+  var btmPath = flip ? a : b;
+
+  questionEl.textContent = "就“" + row.zh + "”而言，哪张更强？";
+  idxEl.textContent = String(iIdx+1);
+  totalEl.textContent = String(trials.length);
+  prog.value = Math.round(iIdx / trials.length * 100);
+
+  Promise.all([preload(topPath), preload(btmPath)]).then(function(){
+    topImg.src = topPath; btmImg.src = btmPath; rtEl.textContent = "0"; t0 = performance.now();
+  });
+}
+
+/* —— 上传到 Google Sheets —— */
+function uploadToGoogleSheets(records){
+  var endpoint = "https://script.google.com/macros/s/AKfycbyDUrSCHulTaz1Cew5lxq7WMptDQWwwRTQf_l1GiNOOL0K3sdy5DKvL9zAkdaGCV9__6g/exec";
+  fetch(endpoint, {
+    method: "POST",
+    mode: "no-cors",
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+    body: JSON.stringify(records)
+  }).catch(function(e){
+    console.error("上传失败（已忽略）:", e);
+  });
+}
+
+/* 收尾：显示完成、下载按钮可用、并上报到表格 */
+function endSurvey(){
+  trial.classList.add('hidden');
+  finish.classList.remove('hidden');
+  prog.value=100;
+  sum.textContent = "本次完成 " + RESP.length + " 题。感谢参与！";
+  uploadToGoogleSheets(RESP);
+}
+
+/* 记录选择 */
+function choose(score,label){
+  var row=trials[iIdx];
+  var rt=Math.round(performance.now()-t0);
+  RESP.push({
+    pid:(window.PID||""),
+    pair_id: row.pair_id,
+    imageA: fixPath(row.imageA),
+    imageB: fixPath(row.imageB),
+    dimension: row.dimension,
+    dimension_zh: row.zh,
+    question_shown: "就“"+row.zh+"”而言，哪张更强？",
+    top: topImg.getAttribute('src')||'',
+    bottom: btmImg.getAttribute('src')||'',
+    choice_label: label,
+    score: String(score),
+    rt_ms: String(rt),
+    ts: new Date().toISOString()
+  });
+  if(iIdx+1>=trials.length){
+    endSurvey();
+  }else{
+    iIdx++; renderTrial();
+  }
+}
+
+/* 事件绑定 */
+document.querySelectorAll('.grid button').forEach(function(b){
+  b.addEventListener('click', function(){ choose(b.getAttribute('data-score'), b.textContent); });
+});
+window.addEventListener('keydown', function(e){
+  if(trial.classList.contains('hidden')) return;
+  if(e.key==="1") choose(2,"上图 非常强(1)");
+  if(e.key==="2") choose(1,"上图 稍强(2)");
+  if(e.key==="3") choose(0,"两者差不多(3)");
+  if(e.key==="4") choose(-1,"下图 稍强(4)");
+  if(e.key==="5") choose(-2,"下图 非常强(5)");
+});
+dl.onclick=function(){ downloadCSV('responses.csv', RESP) };
+
+/* 开始：读取 pairs.csv，汇总图片清单，并为 22 个指标各随机配对 */
+document.getElementById('start').onclick=function(){
+  var err=document.getElementById('err'); err.textContent='';
+  window.PID = (document.getElementById('pid').value||'').trim();
+  if(!document.getElementById('consent').checked){ err.textContent='请勾选知情同意'; return }
+  if(!window.PID){ err.textContent='请填写受试者ID'; return }
+
+  fetch('pairs.csv',{cache:'no-store'})
+    .then(function(r){ if(!r.ok) throw new Error('pairs.csv HTTP '+r.status); return r.text(); })
+    .then(function(txt){
+      var rows = parseCSV(txt);
+      // 从两列收集所有图片，去重
+      var set = {};
+      for(var i=0;i<rows.length;i++){
+        if(rows[i].imageA){ set[fixPath(rows[i].imageA)] = 1; }
+        if(rows[i].imageB){ set[fixPath(rows[i].imageB)] = 1; }
+      }
+      var pool = Object.keys(set);
+      if(pool.length < 2){ throw new Error('图片池为空，请检查 pairs.csv 与图片路径'); }
+
+      trials = buildTrialsFromImagePool(pool);
+      iIdx=0; RESP=[];
+      document.getElementById('intro').classList.add('hidden');
+      document.getElementById('trial').classList.remove('hidden');
+      renderTrial();
+    })
+    .catch(function(e){ err.textContent='启动失败：'+e.message });
+};
+</script>
+</body>
+</html>
